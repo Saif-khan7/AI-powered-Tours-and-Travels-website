@@ -1,2 +1,2 @@
-# AI-powered-Tours-and-Travels-website
+# AI powered Tours and Travels website
 Web Technology Course Project
