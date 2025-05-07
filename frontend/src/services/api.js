@@ -81,3 +81,52 @@ export async function searchHotels(params) {
     }
   }
     
+export async function searchFlights(params) {
+  try {
+    const res = await fetch('/api/flights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) throw new Error(`Error ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('searchFlights error:', err);
+    throw err;
+  }
+}
+
+export async function fetchAllDestinations() {
+  try {
+    const res = await fetch('/api/destinations');
+    if (!res.ok) throw new Error(`Error ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('fetchAllDestinations error:', err);
+    throw err;
+  }
+}
+export async function fetchAllTours() {
+  try {
+    const res = await fetch('/api/tours');
+    if (!res.ok) throw new Error(`Error ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('fetchAllTours error:', err);
+    throw err;
+  }
+}
+
+
+export async function fetchDestinationByName(name) {
+  try {
+    const res = await fetch(`/api/destinations/${encodeURIComponent(name)}`);
+    if (!res.ok) throw new Error(`Error ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('fetchDestinationByName error:', err);
+    throw err;
+  }
+
+  
+}

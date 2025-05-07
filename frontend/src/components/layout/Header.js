@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import {
   SignedIn,
   SignedOut,
@@ -7,29 +7,32 @@ import {
   UserButton
 } from '@clerk/clerk-react';
 
-/* Sticky header styled via App.css > header …  */
 function Header() {
   return (
     <header>
       <div className="logo">
-        <Link to="/">AI Travel Planner</Link>
+        <Link to="/" style={{ textDecoration: 'none', color: '#0096b2' }}>
+          ✈ <strong>TravelAI</strong>
+        </Link>
       </div>
 
       <nav>
         <ul>
-          <li><Link to="/">Home</Link></li>
-
-          {/* add future links here */}
-
-          <SignedIn>
-            <li><UserButton afterSignOutUrl="/" /></li>
-          </SignedIn>
-
-          <SignedOut>
-            <li><SignInButton mode="modal" redirectUrl="/" /></li>
-          </SignedOut>
+          <li><NavLink to="/destinations">📍 Destinations</NavLink></li>
+          <li><NavLink to="/tours">🌐 Tours</NavLink></li> {/* ✅ Added Tours link */}
+          <li><NavLink to="/planner">🧠 Trip Planner</NavLink></li>
+          <li><NavLink to="/itinerary">🗺️ Itinerary Builder</NavLink></li>
         </ul>
       </nav>
+
+      <div className="auth-buttons">
+        <SignedIn>
+          <UserButton afterSignOutUrl="/" />
+        </SignedIn>
+        <SignedOut>
+          <SignInButton mode="modal" redirectUrl="/" />
+        </SignedOut>
+      </div>
     </header>
   );
 }

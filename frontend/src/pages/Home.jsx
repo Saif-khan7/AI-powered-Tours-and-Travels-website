@@ -32,6 +32,11 @@ function Home() {
             <p>Find the best hotel deals in your destination.</p>
             <button>Search Hotels</button>
         </div>
+        <div className="home-card" onClick={()=>navigate('/flights')}>
+         <h2>Flight Search</h2>
+         <p>Track live flight status worldwide. Lorem ipsumm</p>
+         <button>Search Flights</button>
+        </div>
       </div>
         
       {/* Auth‑gated advanced tools */}

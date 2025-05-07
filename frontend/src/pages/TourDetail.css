@@ -1,0 +1,50 @@
+.tour-container {
+    max-width: 1000px;
+    margin: 40px auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    background: #f9fafb;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  }
+  
+  .tour-image {
+    width: 100%;
+    border-radius: 12px;
+    max-height: 400px;
+    object-fit: cover;
+  }
+  
+  .tour-details {
+    padding: 10px 0;
+  }
+  
+  .tour-details h1 {
+    font-size: 28px;
+    color: #222;
+    margin-bottom: 5px;
+  }
+  
+  .location {
+    color: #0096b2;
+    font-weight: 500;
+    margin-bottom: 10px;
+  }
+  
+  .description {
+    font-size: 16px;
+    line-height: 1.6;
+    margin-bottom: 15px;
+  }
+  
+  ul {
+    padding-left: 20px;
+  }
+  
+  ul li {
+    margin-bottom: 6px;
+    line-height: 1.5;
+  }
+  

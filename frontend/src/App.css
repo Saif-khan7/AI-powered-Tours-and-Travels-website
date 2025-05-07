@@ -27,6 +27,39 @@ header {
   top: 0;
   z-index: 1000;
 }
+.auth-buttons {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+nav ul {
+  list-style: none;
+  display: flex;
+  gap: 25px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+}
+
+nav ul li a {
+  text-decoration: none;
+  font-weight: 600;
+  color: #333;
+}
+
+nav ul li a:hover {
+  color: #f59e0b; /* Hover effect (orange) */
+}
+
+nav ul li a.active {
+  background-color: #f59e0b;
+  padding: 6px 12px;
+  border-radius: 6px;
+  color: white !important;
+}
+
+
 header .logo {
   font-size: 24px;
   font-weight: bold;
@@ -317,5 +350,41 @@ footer {
   }
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+  .destination-container {
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    color: #333;
+  }
+  .destination-container h1 {
+    font-size: 32px;
+    margin-bottom: 10px;
+  }
+  .destination-image {
+    width: 100%;
+    max-height: 400px;
+    object-fit: cover;
+    border-radius: 10px;
+    margin-bottom: 20px;
+  }
+  .destination-tagline {
+    font-size: 16px;
+    color: #777;
+    margin-bottom: 20px;
+  }
+  .destination-container h3 {
+    margin-top: 30px;
+    font-size: 20px;
+  }
+  .destination-container ul {
+    padding-left: 20px;
+  }
+  .destination-container ul li {
+    margin-bottom: 8px;
+    line-height: 1.6;
   }
 }

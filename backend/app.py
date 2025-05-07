@@ -1,139 +1,259 @@
-# app.py
-import os
-import time
-import traceback
-import requests
+"""
+AI Travel Planner – Flask backend
+---------------------------------
+• Gemini 1.5 Flash (/api/generate)
+• Amadeus Hotel Offers (/api/hotels)
+• Aviationstack Flight Search (/api/flights) – free‑tier fallback
+• MongoDB Destination Fetch (/api/destinations/<name>, /api/destinations)
+"""
+
+import os, time, traceback, requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import google.generativeai as genai
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+from urllib.parse import unquote
 
-# ─── Load env ────────────────────────────────────────────────────────────────
+# ─── Load env & DB Config ───────────────────────────────────────────────
 load_dotenv()
-GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY")
-AMAD_CLIENT_ID     = os.environ.get("AMADEUS_CLIENT_ID")
-AMAD_CLIENT_SECRET = os.environ.get("AMADEUS_CLIENT_SECRET")
+GEMINI_API_KEY        = os.getenv("GEMINI_API_KEY")
+AMADEUS_CLIENT_ID     = os.getenv("AMADEUS_CLIENT_ID")
+AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET")
+AVIATIONSTACK_KEY     = os.getenv("AVIATIONSTACK_KEY")
+MONGO_URI             = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+AVIATIONSTACK_BASE    = "http://api.aviationstack.com"
 
-if not GEMINI_API_KEY:
-    print("⚠️  Missing GEMINI_API_KEY in .env")
-if not AMAD_CLIENT_ID or not AMAD_CLIENT_SECRET:
-    print("⚠️  Missing AMADEUS_CLIENT_ID / _SECRET in .env")
+mongo     = MongoClient(MONGO_URI)
+db        = mongo["travel_planner"]
+destinations_col = db["destinations"]
 
-# ─── Flask + CORS ────────────────────────────────────────────────────────────
+# ─── Flask Setup ────────────────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)
 
-# ─── Gemini Setup ────────────────────────────────────────────────────────────
+# ─── Gemini Config ──────────────────────────────────────────────────────
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 except Exception as e:
-    print("Error loading Gemini model:", e)
+    print("⚠️  Gemini init failed:", e)
     gemini_model = None
 
-def remove_code_fences(text: str) -> str:
-    return text.replace("```json","").replace("```","").strip()
+def _strip_code_fences(t: str) -> str:
+    return t.replace("```json", "").replace("```", "").strip()
 
-# ─── Amadeus OAuth2 Cache ────────────────────────────────────────────────────
-_amad_token = None
-_amad_expires = 0
-
-def get_amadeus_token():
-    global _amad_token, _amad_expires
-    if _amad_token and time.time() < _amad_expires - 60:
+# ─── Amadeus Token Cache ────────────────────────────────────────────────
+_amad_token, _amad_exp = None, 0
+def _amad_token_get():
+    global _amad_token, _amad_exp
+    if _amad_token and time.time() < _amad_exp - 60:
         return _amad_token
-
-    resp = requests.post(
+    r = requests.post(
         "https://test.api.amadeus.com/v1/security/oauth2/token",
         data={
-            "grant_type":    "client_credentials",
-            "client_id":     AMAD_CLIENT_ID,
-            "client_secret": AMAD_CLIENT_SECRET
-        }
+            "grant_type": "client_credentials",
+            "client_id": AMADEUS_CLIENT_ID,
+            "client_secret": AMADEUS_CLIENT_SECRET
+        }, timeout=15
     )
-    resp.raise_for_status()
-    j = resp.json()
+    r.raise_for_status()
+    j = r.json()
     _amad_token = j["access_token"]
-    _amad_expires = time.time() + j.get("expires_in", 1800)
+    _amad_exp = time.time() + j.get("expires_in", 1800)
     return _amad_token
 
-# ─── /api/generate ───────────────────────────────────────────────────────────
+# ─── Gemini Endpoint ────────────────────────────────────────────────────
 @app.route("/api/generate", methods=["POST"])
 def generate():
-    data = request.get_json() or {}
-    prompt = data.get("prompt","").strip()
+    b = request.get_json() or {}
+    prompt = (b.get("prompt") or "").strip()
     if not prompt:
-        return jsonify({"error":"No prompt provided"}), 400
+        return jsonify({"error": "No prompt provided"}), 400
     if not gemini_model:
-        return jsonify({"error":"Gemini model unavailable"}), 500
+        return jsonify({"error": "Gemini unavailable"}), 500
+    try:
+        res  = gemini_model.generate_content(prompt)
+        text = res.text if res and res.text else "No response."
+        return jsonify({"reply": _strip_code_fences(text)})
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"error": str(exc)}), 500
+
+# ─── Hotel Search via Amadeus ───────────────────────────────────────────
+@app.route("/api/hotels", methods=["POST"])
+def hotels():
+    b = request.get_json() or {}
+    city = b.get("cityCode")
+    cin  = b.get("checkInDate")
+    cout = b.get("checkOutDate")
+    adults = b.get("adults", 1)
+    if not all([city, cin, cout]):
+        return jsonify({"error": "cityCode, checkInDate, checkOutDate required"}), 400
+    try:
+        token = _amad_token_get()
+        headers = {"Authorization": f"Bearer {token}"}
+        # Step 1: Hotel IDs
+        lst = requests.get(
+            "https://test.api.amadeus.com/v1/reference-data/locations/hotels/by-city",
+            headers=headers, params={"cityCode": city}, timeout=15
+        )
+        lst.raise_for_status()
+        hotel_ids = [d["hotelId"] for d in lst.json().get("data", [])][:5]
+        if not hotel_ids:
+            return jsonify({"error": "No hotels found"}), 404
+        # Step 2: Offers
+        offers = requests.get(
+            "https://test.api.amadeus.com/v3/shopping/hotel-offers",
+            headers=headers,
+            params={
+                "hotelIds": ",".join(hotel_ids),
+                "checkInDate": cin,
+                "checkOutDate": cout,
+                "adults": adults,
+                "roomQuantity": 1,
+                "bestRateOnly": "true",
+                "currency": "USD",
+                "sort": "PRICE"
+            }, timeout=15
+        )
+        offers.raise_for_status()
+        return jsonify(offers.json())
+    except requests.HTTPError as he:
+        traceback.print_exc()
+        return jsonify({"error": he.response.text}), he.response.status_code
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"error": str(exc)}), 500
+
+# ─── Flight Search via Aviationstack ────────────────────────────────────
+@app.route("/api/flights", methods=["POST", "GET"])
+def flights():
+    if not AVIATIONSTACK_KEY:
+        return jsonify({"error": "AVIATIONSTACK_KEY missing"}), 500
+    src = request.args if request.method == "GET" else (request.get_json() or {})
+    params_full = {
+        "access_key": AVIATIONSTACK_KEY,
+        "dep_iata": src.get("dep_iata"),
+        "arr_iata": src.get("arr_iata"),
+        "flight_date": src.get("flight_date"),
+        "flight_number": src.get("flight_number"),
+        "limit": 20
+    }
+    params_full = {k: v for k, v in params_full.items() if v}
+    if len(params_full) <= 1:
+        return jsonify({"error": "Provide dep_iata, arr_iata, or flight_number"}), 400
+
+    def call(p):
+        r = requests.get(f"{AVIATIONSTACK_BASE}/v1/flights", params=p, timeout=15)
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, {"error": r.text}
+
+    status, body = call(params_full)
+    if status == 403 and isinstance(body, dict) and body.get("error", {}).get("code") == "function_access_restricted":
+        minimal = {"access_key": AVIATIONSTACK_KEY, "limit": 20}
+        for k in ("flight_number", "dep_iata", "arr_iata"):
+            if k in params_full:
+                minimal[k] = params_full[k]
+                break
+        status, body = call(minimal)
+    return jsonify(body), status
+
+# ─── Fetch All Destinations ─────────────────────────────────────────────
+@app.route("/api/destinations", methods=["GET"])
+def get_all_destinations():
+    try:
+        destinations = list(destinations_col.find({}, {"_id": 0}))
+        return jsonify(destinations)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ─── Fetch Destination by Name ──────────────────────────────────────────
+@app.route("/api/destinations/<string:name>", methods=["GET"])
+def get_destination(name):
+    doc = destinations_col.find_one({"name": name})
+    if not doc:
+        return jsonify({"error": "Destination not found"}), 404
+    return jsonify({
+        "id": str(doc.get("_id")),
+        "name": doc.get("name"),
+        "heroImage": doc.get("heroImage"),
+        "tagline": doc.get("tagline"),
+        "overview": doc.get("overview"),
+        "topAttractions": doc.get("topAttractions", []),
+        "bestTimeToVisit": doc.get("bestTimeToVisit"),
+        "recommendedDuration": doc.get("recommendedDuration"),
+        "localTips": doc.get("localTips", []),
+        "weatherSummary": doc.get("weatherSummary", {}),
+        "currency": doc.get("currency"),
+        "language": doc.get("language"),
+        "googleMapEmbed": doc.get("googleMapEmbed")
+    })
+    
+@app.route("/api/tours", methods=["GET"])
+def get_all_tours():
+    all_tours = list(db["tours"].find({}, {"_id": 0}))  # Exclude _id for frontend unless needed
+    return jsonify(all_tours)
+
+@app.route("/api/tours/<string:name>", methods=["GET"])
+def get_tour_by_name(name):
+    decoded_name = unquote(name)
+    tour = db["tours"].find_one({"name": decoded_name})
+    if not tour:
+        return jsonify({"error": "Tour not found"}), 404
+    return jsonify({
+        "id": str(tour.get("_id")),
+        "name": tour.get("name"),
+        "location": tour.get("location"),
+        "image": tour.get("image"),
+        "description": tour.get("description"),
+        "price": tour.get("price"),
+        "duration": tour.get("duration"),
+        "highlights": tour.get("highlights", [])
+    })
+    
+# ─── /api/chat ───────────────────────────────────────────────────────────────
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    data = request.get_json() or {}
+    user_message = data.get("message", "").strip()
+    if not user_message:
+        return jsonify({"error": "No message provided"}), 400
+    if not gemini_model:
+        return jsonify({"error": "Gemini model unavailable"}), 500
+
+    # System prompt to restrict Gemini to travel-related queries only
+    system_prompt = (
+        "You are a helpful travel assistant. "
+        "Answer only travel-related questions (such as about destinations, flights, hotels, itineraries, visas, packing, transportation, local customs, travel safety, etc). "
+        "If the user's question is not related to travel, politely reply: "
+        "'I'm designed to answer travel-related questions. Please ask me something about travel.'"
+    )
 
     try:
-        resp = gemini_model.generate_content(prompt)
-        text = resp.text if resp and resp.text else "No response from Gemini."
-        return jsonify({"reply": remove_code_fences(text)})
+        # Gemini API expects a conversation; provide system prompt and user message
+        full_prompt = (
+        "You are a helpful travel assistant. "
+        "Answer only travel-related questions (such as about destinations, flights, hotels, itineraries, visas, packing, transportation, local customs, travel safety, etc). "
+        "If the user's question is not related to travel, politely reply: "
+        "'I'm designed to answer travel-related questions. Please ask me something about travel.'\n\n"
+        f"User: {user_message}"
+        )
+        response = gemini_model.generate_content(full_prompt)
+        text = response.text if response and response.text else "No response from Gemini."
+        return jsonify({"reply": _strip_code_fences(text)})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# ─── /api/hotels ─────────────────────────────────────────────────────────────
-@app.route("/api/hotels", methods=["POST"])
-def hotels():
-    data      = request.get_json() or {}
-    city      = data.get("cityCode")
-    check_in  = data.get("checkInDate")
-    check_out = data.get("checkOutDate")
-    adults    = data.get("adults",1)
-
-    if not city or not check_in or not check_out:
-        return jsonify({"error":"Missing parameters"}), 400
-
-    try:
-        token = get_amadeus_token()
-        headers = {"Authorization":f"Bearer {token}"}
-
-        # 1) Get hotel IDs by city
-        list_r = requests.get(
-            "https://test.api.amadeus.com/v1/reference-data/locations/hotels/by-city",
-            headers=headers, params={"cityCode":city}
-        )
-        list_r.raise_for_status()
-        data_list = list_r.json().get("data",[])
-        if not data_list:
-            return jsonify({"error":"No hotels found"}), 404
-
-        hotel_ids = [h["hotelId"] for h in data_list][:5]
-        ids_csv   = ",".join(hotel_ids)
-
-        # 2) Get offers (v3)
-        offers_r = requests.get(
-            "https://test.api.amadeus.com/v3/shopping/hotel-offers",
-            headers=headers,
-            params={
-                "hotelIds":     ids_csv,
-                "checkInDate":  check_in,
-                "checkOutDate": check_out,
-                "adults":       adults,
-                "roomQuantity": 1,
-                "bestRateOnly": "true",
-                "currency":     "USD",
-                "sort":         "PRICE"
-            }
-        )
-        offers_r.raise_for_status()
-        return jsonify(offers_r.json())
-
-    except requests.HTTPError as he:
-        traceback.print_exc()
-        return jsonify({"error":he.response.text}), he.response.status_code
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error":str(e)}), 500
-
-# ─── Root ────────────────────────────────────────────────────────────────────
+# ─── Root Endpoint ──────────────────────────────────────────────────────
 @app.route("/")
-def index():
-    return "Trip Planner API (Gemini + Amadeus) running!"
+def root():
+    return "🌍 AI Travel Planner API is running"
 
-# ─── Run ─────────────────────────────────────────────────────────────────────
-if __name__=="__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+# ─── Main ───────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
